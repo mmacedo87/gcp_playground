@@ -59,11 +59,11 @@ steps:
       - |
         VERDICT="$(cat verdict.txt)"
         FAILED="$(cat failed_count.txt)"
-        if [ "$VERDICT" = "request_changes" ]; then
-          echo "ERROR: ${FAILED} validation check(s) failed."
+        if [ "$$VERDICT" = "request_changes" ]; then
+          echo "ERROR: $${FAILED} validation check(s) failed."
           exit 1
         fi
-        echo "Validation verdict: ${VERDICT}"
+        echo "Validation verdict: $${VERDICT}"
 
 availableSecrets:
   secretManager:
