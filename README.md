@@ -16,3 +16,4 @@ that's expected, not a bug.
 `validate_pr_ci.py` and `validation_ci.yml` are the original GitHub Actions
 files, kept here for reference. They are not used by the Cloud Build
 pipeline.
+2.2
