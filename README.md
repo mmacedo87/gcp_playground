@@ -7,9 +7,11 @@ branch: it runs the checks in `validate-pr.py` and submits a GitHub PR
 review (Approve / Request changes), plus a sticky comment with the full
 report.
 
-`validate-pr.py` is currently a **placeholder** — most checks return `True`
-unconditionally. Replace it with the real Dataform validation logic when
-ready.
+`validate-pr.py` now contains the real Dataform validation logic (branch
+freshness, `definitions/` folder structure, git tag / semver validation,
+Dataform compilation). **CHECK 5 (Dataform compilation) will fail until a
+real Dataform project (with `workflow_settings.yaml`) exists in this repo** —
+that's expected, not a bug.
 
 `validate_pr_ci.py` and `validation_ci.yml` are the original GitHub Actions
 files, kept here for reference. They are not used by the Cloud Build
