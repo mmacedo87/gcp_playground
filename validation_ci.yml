@@ -1,0 +1,114 @@
+name: PR Validation
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+    branches:
+      - dev
+      - test
+      - integration
+      - production
+      - 'feature/**'
+      - mmacedo-dev
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-validation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate Dataform PR
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR head commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Fetch tags
+        run: git fetch --tags --force origin
+
+      - name: Configure git identity
+        # required for the dry-run merge executed by the conflict check
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run validations
+        id: validate
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: python .github/scripts/validate_pr_ci.py
+
+      - name: Publish validation review
+        uses: actions/github-script@v7
+        env:
+          VERDICT: ${{ steps.validate.outputs.verdict }}
+          REPORT_PATH: ${{ steps.validate.outputs.report_path }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- dataform-pr-validation -->';
+            const verdict = process.env.VERDICT || 'request_changes';
+            let body = fs.readFileSync(process.env.REPORT_PATH, 'utf8');
+            if (body.length > 60000) {
+              body = body.slice(0, 60000) + '\n\n_(report truncated — see the job logs for full output)_';
+            }
+
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+
+            // Sticky comment with the full report
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: pull_number, per_page: 100,
+            });
+            const previous = comments.find(c => c.body && c.body.includes(marker));
+            if (previous) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: previous.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number: pull_number, body });
+            }
+
+            // Verdict as a PR review
+            const events = {
+              approve: ['APPROVE', '✅ Automated validation passed — approved.'],
+              request_changes: ['REQUEST_CHANGES', '❌ Automated validation failed — manual review required. See the validation report comment.'],
+              skipped: ['APPROVE', '⏭️ PR author is a CODEOWNER — validations bypassed.'],
+            };
+            const [event, summary] = events[verdict] || events.request_changes;
+
+            try {
+              await github.rest.pulls.createReview({
+                owner, repo, pull_number, event, body: summary,
+              });
+            } catch (error) {
+              core.warning(`Could not submit a ${event} review: ${error.message}`);
+              await github.rest.pulls.createReview({
+                owner, repo, pull_number, event: 'COMMENT', body: summary,
+              });
+            }
+
+      - name: Fail job when validation did not pass
+        if: steps.validate.outputs.verdict == 'request_changes'
+        run: |
+          echo "::error::${{ steps.validate.outputs.failed_count }} validation check(s) failed"
+          exit 1

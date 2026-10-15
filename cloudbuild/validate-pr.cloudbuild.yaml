@@ -1,0 +1,78 @@
+steps:
+  - id: fetch-tags
+    name: gcr.io/cloud-builders/git
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        git fetch --unshallow || true
+        git fetch --tags --force origin
+
+  - id: git-identity
+    name: gcr.io/cloud-builders/git
+    waitFor: ['fetch-tags']
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        git config user.name "cloud-build-pr-validator"
+        git config user.email "cloud-build-pr-validator@users.noreply.github.com"
+
+  - id: fetch-pr-context
+    name: python:3.11-slim
+    waitFor: ['git-identity']
+    entrypoint: python3
+    args: ['cloudbuild/scripts/fetch_pr_context.py']
+    env:
+      - 'REPO_FULL_NAME=${_REPO_OWNER}/${_REPO_NAME}'
+      - 'PR_NUMBER=$_PR_NUMBER'
+      - 'BASE_REF=$_BASE_BRANCH'
+      - 'HEAD_REF=$_HEAD_BRANCH'
+      - 'HEAD_SHA=$COMMIT_SHA'
+    secretEnv: ['GITHUB_TOKEN']
+
+  - id: run-validations
+    name: python:3.11-slim
+    waitFor: ['fetch-pr-context']
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        apt-get update -qq && apt-get install -y -qq git > /dev/null
+        python3 cloudbuild/scripts/validate_pr_cloudbuild.py
+
+  - id: submit-pr-review
+    name: python:3.11-slim
+    waitFor: ['run-validations']
+    entrypoint: python3
+    args: ['cloudbuild/scripts/submit_pr_review.py']
+    env:
+      - 'REPO_FULL_NAME=${_REPO_OWNER}/${_REPO_NAME}'
+    secretEnv: ['GITHUB_TOKEN']
+
+  - id: gate-on-verdict
+    name: python:3.11-slim
+    waitFor: ['submit-pr-review']
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        VERDICT="$(cat verdict.txt)"
+        FAILED="$(cat failed_count.txt)"
+        if [ "$VERDICT" = "request_changes" ]; then
+          echo "ERROR: ${FAILED} validation check(s) failed."
+          exit 1
+        fi
+        echo "Validation verdict: ${VERDICT}"
+
+availableSecrets:
+  secretManager:
+    - versionName: projects/${PROJECT_ID}/secrets/gcp-playground-github-token/versions/latest
+      env: GITHUB_TOKEN
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+substitutions:
+  _REPO_OWNER: mmacedo87
+  _REPO_NAME: gcp_playground
